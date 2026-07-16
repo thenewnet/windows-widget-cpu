@@ -101,7 +101,8 @@ Double-click **`build_exe.bat`**. Sau khi xong, lấy file
 | Click icon ở khay hệ thống | Ẩn/hiện widget |
 
 Menu chuột phải: khóa vị trí · xoay dọc/ngang · thu gọn · hiện nhãn ·
-**ổ cứng** · độ trong suốt · **màu sắc** · khởi động cùng Windows · thoát.
+**ổ cứng** · độ trong suốt · **màu sắc** · **hiển thị GPU** ·
+khởi động cùng Windows · thoát.
 
 ### Chế độ hiển thị ổ cứng
 
@@ -134,7 +135,21 @@ lần đăng nhập (đăng ký ở `HKCU\...\Run`, không cần quyền admin).
 - **Disk** mặc định hiển thị phần trăm **dung lượng đã dùng**. Bạn có thể đổi
   sang phần trăm **hoạt động I/O** trong menu chuột phải → **Ổ cứng**.
 - **GPU** dùng `nvidia-smi` (có sẵn khi cài driver NVIDIA). Máy dùng GPU
-  AMD/Intel sẽ tự ẩn vòng GPU.
+  AMD/Intel sẽ tự ẩn vòng GPU. Có thể tắt hẳn việc đọc GPU trong menu chuột
+  phải → **Hiển thị GPU**.
+
+### Gặp hộp thoại lỗi `nvidia-smi.exe` (0xc0000142)?
+
+Lỗi này do **`nvidia-smi.exe` trên máy bạn không khởi động được** (driver NVIDIA
+cài thiếu/hỏng, hoặc file còn sót lại) — widget chỉ vô tình gọi tới nó. Bản mới
+đã **tự chặn hộp thoại này**, nên chỉ cần cập nhật là hết:
+
+```powershell
+irm https://raw.githubusercontent.com/thenewnet/windows-widget-cpu/main/install.ps1 | iex
+```
+
+Ngoài ra bạn có thể tắt hẳn đọc GPU: chuột phải → **Hiển thị GPU** (bỏ chọn).
+Muốn sửa triệt để `nvidia-smi`, hãy cài lại driver NVIDIA mới nhất.
 - **Nhiệt độ CPU** trên Windows đôi khi không có sẵn (Windows không expose
   cảm biến cho ứng dụng thường). Khi đó widget sẽ dùng nhiệt độ GPU nếu có,
   hoặc ẩn phần nhiệt độ.

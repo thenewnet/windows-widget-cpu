@@ -55,6 +55,24 @@ APP_NAME = "FloatMonitor"
 IS_WINDOWS = sys.platform.startswith("win")
 
 
+def mute_windows_error_dialogs() -> None:
+    """Chặn hộp thoại 'Application Error' của Windows khi tiến trình con (vd
+    nvidia-smi) lỗi khởi động. Tiến trình con kế thừa error-mode từ tiến trình
+    này nên sẽ không bật popup nữa mà chỉ trả về mã lỗi."""
+    if not IS_WINDOWS:
+        return
+    try:
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOGPFAULTERRORBOX = 0x0002
+        SEM_NOOPENFILEERRORBOX = 0x8000
+        ctypes.windll.kernel32.SetErrorMode(
+            SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+            | SEM_NOOPENFILEERRORBOX
+        )
+    except Exception:
+        pass
+
+
 def config_dir() -> str:
     if IS_WINDOWS:
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -110,6 +128,7 @@ DEFAULT_CONFIG = {
     "compact": False,
     "show_labels": True,
     "disk_mode": "usage",      # usage = dung lượng đã dùng | activity = hoạt động I/O
+    "gpu_enabled": True,       # bật/tắt đọc GPU qua nvidia-smi
     "theme": "cyber",          # tên theme dựng sẵn, hoặc "custom"
     "colors": dict(THEMES["cyber"]),  # màu thực tế đang dùng cho từng chỉ số
 }
@@ -196,11 +215,13 @@ class _WindowsDiskPerf:
 class SystemMetrics:
     """Đọc các chỉ số hệ thống. An toàn khi một số chỉ số không khả dụng."""
 
-    def __init__(self) -> None:
+    def __init__(self, gpu_enabled: bool = True) -> None:
+        mute_windows_error_dialogs()  # tránh popup nếu nvidia-smi lỗi khởi động
         self._last_net = psutil.net_io_counters()
         self._last_disk_io = self._safe_disk_io()
         self._last_time = time.monotonic()
-        self._gpu_available = self._detect_nvidia()
+        self.gpu_enabled = gpu_enabled
+        self._gpu_available = self._detect_nvidia() if gpu_enabled else False
 
         # Nguồn mức hoạt động ổ đĩa: Windows dùng PDH, nơi khác dùng busy_time
         self._win_disk = None
@@ -247,9 +268,14 @@ class SystemMetrics:
             raise RuntimeError(out.stderr)
         return out.stdout
 
+    def set_gpu_enabled(self, on: bool) -> None:
+        self.gpu_enabled = on
+        if on and not self._gpu_available:
+            self._gpu_available = self._detect_nvidia()
+
     def _read_gpu(self) -> tuple[float | None, float | None]:
         """Trả về (gpu_util_%, gpu_temp_°C) hoặc (None, None)."""
-        if not self._gpu_available:
+        if not self.gpu_enabled or not self._gpu_available:
             return None, None
         try:
             raw = self._nvidia_smi([
@@ -405,16 +431,11 @@ class MonitorWidget(QWidget):
     def __init__(self, cfg: dict):
         super().__init__()
         self.cfg = cfg
-        self.metrics = SystemMetrics()
+        self.metrics = SystemMetrics(gpu_enabled=cfg.get("gpu_enabled", True))
         self._drag_offset = None
         self._data = {}
 
-        # Các gauge sẽ hiển thị dưới dạng vòng, màu lấy từ config
-        self.gauges = []
-        for key, label in GAUGE_SPECS:
-            if key == "gpu" and not self.metrics.gpu_available:
-                continue
-            self.gauges.append(Gauge(key, label, self._color_for(key)))
+        self._build_gauges()
 
         self._init_window()
         self._build_menu()
@@ -430,6 +451,15 @@ class MonitorWidget(QWidget):
         self.anim_timer.start(16)
 
         self._poll()
+
+    def _build_gauges(self) -> None:
+        """Dựng danh sách gauge theo config (ẩn GPU nếu tắt hoặc không có)."""
+        show_gpu = self.cfg.get("gpu_enabled", True) and self.metrics.gpu_available
+        self.gauges = []
+        for key, label in GAUGE_SPECS:
+            if key == "gpu" and not show_gpu:
+                continue
+            self.gauges.append(Gauge(key, label, self._color_for(key)))
 
     # -- Thiết lập cửa sổ --------------------------------------------------- #
     def _init_window(self) -> None:
@@ -546,6 +576,10 @@ class MonitorWidget(QWidget):
         disk_menu.addAction(act_disk_usage)
         disk_menu.addAction(act_disk_act)
 
+        self.act_gpu = QAction("Hiển thị GPU (nvidia-smi)", self, checkable=True)
+        self.act_gpu.setChecked(self.cfg.get("gpu_enabled", True))
+        self.act_gpu.triggered.connect(self._toggle_gpu)
+
         self.act_autostart = QAction("Khởi động cùng Windows", self, checkable=True)
         self.act_autostart.setChecked(self._is_autostart())
         self.act_autostart.triggered.connect(self._toggle_autostart)
@@ -562,6 +596,7 @@ class MonitorWidget(QWidget):
         self.menu.addMenu(op_menu)
         self.menu.addMenu(color_menu)
         self.menu.addSeparator()
+        self.menu.addAction(self.act_gpu)
         self.menu.addAction(self.act_autostart)
         self.menu.addSeparator()
         self.menu.addAction(act_quit)
@@ -606,6 +641,16 @@ class MonitorWidget(QWidget):
                     val, label = self._disk_value_label()
                     g.label = label
                     g.set_target(val)
+        self.update()
+        save_config(self.cfg)
+
+    def _toggle_gpu(self) -> None:
+        on = self.act_gpu.isChecked()
+        self.cfg["gpu_enabled"] = on
+        self.metrics.set_gpu_enabled(on)
+        self._build_gauges()           # thêm/bớt vòng GPU
+        self._layout_window()          # đổi kích thước cửa sổ
+        self._poll()
         self.update()
         save_config(self.cfg)
 
