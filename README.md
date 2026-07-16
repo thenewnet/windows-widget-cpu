@@ -29,7 +29,30 @@ vòng sáng chuyển màu đỏ khi tải cao, hiệu ứng chạy mượt.
 - 📥 Thu nhỏ xuống **khay hệ thống (system tray)**
 - 💾 Tự lưu vị trí & cài đặt
 
-## Cách chạy nhanh nhất
+## ⚡ Cài đặt 1 dòng lệnh (khuyên dùng)
+
+Mở **PowerShell** rồi dán đúng 1 dòng này và Enter:
+
+```powershell
+irm https://raw.githubusercontent.com/thenewnet/windows-widget-cpu/main/install.ps1 | iex
+```
+
+Script sẽ tự động: tải mã nguồn từ GitHub (**không cần clone repo**), tạo môi
+trường Python riêng, cài thư viện, tạo shortcut ở Start Menu + Desktop và **chạy
+widget luôn**. Nếu máy chưa có Python, script sẽ thử cài giúp qua `winget`.
+
+> Nếu PowerShell chặn do ExecutionPolicy, dùng dòng này:
+> ```powershell
+> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/thenewnet/windows-widget-cpu/main/install.ps1 | iex"
+> ```
+
+**Gỡ cài đặt** cũng bằng 1 dòng:
+
+```powershell
+irm https://raw.githubusercontent.com/thenewnet/windows-widget-cpu/main/uninstall.ps1 | iex
+```
+
+## Cách chạy từ mã nguồn (nếu bạn đã clone repo)
 
 1. Cài **Python 3.9+** (nhớ tick *Add Python to PATH* khi cài).
 2. Double-click **`run.bat`** — lần đầu sẽ tự cài thư viện rồi mở widget.
