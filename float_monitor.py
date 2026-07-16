@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover
 from PySide6.QtCore import Qt, QTimer, QPointF, QRectF
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QColor,
     QFont,
     QGuiApplication,
@@ -39,6 +40,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QMenu,
     QSystemTrayIcon,
     QWidget,
@@ -64,6 +66,40 @@ def config_dir() -> str:
 
 CONFIG_PATH = os.path.join(config_dir(), "config.json")
 
+# Các chỉ số vẽ dưới dạng vòng gauge (thứ tự hiển thị)
+GAUGE_SPECS = [
+    ("cpu", "CPU"),
+    ("ram", "RAM"),
+    ("disk", "DISK"),
+    ("gpu", "GPU"),
+]
+
+# Bảng màu chủ đề dựng sẵn: mỗi theme gán màu cho từng chỉ số + "net" (accent)
+THEMES = {
+    "cyber":  {"cpu": "#00E5FF", "ram": "#A78BFA", "disk": "#00E676",
+               "gpu": "#FFB300", "net": "#00E5FF"},
+    "aurora": {"cpu": "#00F5D4", "ram": "#7B61FF", "disk": "#4CC9F0",
+               "gpu": "#F72585", "net": "#00F5D4"},
+    "sunset": {"cpu": "#FF6B6B", "ram": "#FFD166", "disk": "#FF9F1C",
+               "gpu": "#EF476F", "net": "#FFD166"},
+    "matrix": {"cpu": "#39FF14", "ram": "#00E676", "disk": "#7CFC00",
+               "gpu": "#B6FF00", "net": "#39FF14"},
+    "ice":    {"cpu": "#E6EDF3", "ram": "#9FB3C8", "disk": "#6FA8DC",
+               "gpu": "#B0BEC5", "net": "#8BD3FF"},
+    "magma":  {"cpu": "#FF3D57", "ram": "#FF7A00", "disk": "#FFB300",
+               "gpu": "#FF006E", "net": "#FF7A00"},
+}
+
+# Tên hiển thị tiếng Việt cho các theme
+THEME_LABELS = {
+    "cyber": "Cyber (xanh neon)",
+    "aurora": "Aurora (cực quang)",
+    "sunset": "Sunset (hoàng hôn)",
+    "matrix": "Matrix (xanh lá)",
+    "ice": "Ice (trắng bạc)",
+    "magma": "Magma (đỏ cam)",
+}
+
 DEFAULT_CONFIG = {
     "pos_x": None,
     "pos_y": None,
@@ -72,14 +108,21 @@ DEFAULT_CONFIG = {
     "panel_opacity": 0.72,     # độ mờ nền panel (0..1)
     "compact": False,
     "show_labels": True,
+    "theme": "cyber",          # tên theme dựng sẵn, hoặc "custom"
+    "colors": dict(THEMES["cyber"]),  # màu thực tế đang dùng cho từng chỉ số
 }
 
 
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
+    cfg["colors"] = dict(DEFAULT_CONFIG["colors"])
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg.update(json.load(f))
+            data = json.load(f)
+        colors = data.pop("colors", None)
+        cfg.update(data)
+        if isinstance(colors, dict):
+            cfg["colors"].update(colors)  # giữ đủ khóa dù file cũ thiếu
     except (OSError, ValueError):
         pass
     return cfg
@@ -266,14 +309,12 @@ class MonitorWidget(QWidget):
         self._drag_offset = None
         self._data = {}
 
-        # Các gauge sẽ hiển thị dưới dạng vòng
-        self.gauges = [
-            Gauge("cpu", "CPU", "#00E5FF"),
-            Gauge("ram", "RAM", "#A78BFA"),
-            Gauge("disk", "DISK", "#00E676"),
-        ]
-        if self.metrics.gpu_available:
-            self.gauges.append(Gauge("gpu", "GPU", "#FFB300"))
+        # Các gauge sẽ hiển thị dưới dạng vòng, màu lấy từ config
+        self.gauges = []
+        for key, label in GAUGE_SPECS:
+            if key == "gpu" and not self.metrics.gpu_available:
+                continue
+            self.gauges.append(Gauge(key, label, self._color_for(key)))
 
         self._init_window()
         self._build_menu()
@@ -363,6 +404,29 @@ class MonitorWidget(QWidget):
             a.triggered.connect(lambda _=False, p=pct: self._set_opacity(p / 100))
             op_menu.addAction(a)
 
+        # Submenu chọn màu: theme dựng sẵn + tùy chỉnh từng chỉ số
+        color_menu = QMenu("Màu sắc", self.menu)
+        color_menu.setStyleSheet(self.menu.styleSheet())
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        for name, label in THEME_LABELS.items():
+            a = QAction(label, color_menu, checkable=True)
+            a.setChecked(self.cfg.get("theme") == name)
+            a.triggered.connect(lambda _=False, n=name: self._set_theme(n))
+            self.theme_group.addAction(a)
+            color_menu.addAction(a)
+        color_menu.addSeparator()
+        for key, label in GAUGE_SPECS:
+            if key == "gpu" and not self.metrics.gpu_available:
+                continue
+            a = QAction(f"Tùy chỉnh màu {label}…", color_menu)
+            a.triggered.connect(lambda _=False, k=key: self._pick_color(k))
+            color_menu.addAction(a)
+        a_net = QAction("Tùy chỉnh màu Mạng/nhấn…", color_menu)
+        a_net.triggered.connect(lambda _=False: self._pick_color("net"))
+        color_menu.addAction(a_net)
+        self.color_menu = color_menu
+
         self.act_autostart = QAction("Khởi động cùng Windows", self, checkable=True)
         self.act_autostart.setChecked(self._is_autostart())
         self.act_autostart.triggered.connect(self._toggle_autostart)
@@ -376,6 +440,7 @@ class MonitorWidget(QWidget):
         self.menu.addAction(self.act_compact)
         self.menu.addAction(self.act_labels)
         self.menu.addMenu(op_menu)
+        self.menu.addMenu(color_menu)
         self.menu.addSeparator()
         self.menu.addAction(self.act_autostart)
         self.menu.addSeparator()
@@ -411,6 +476,41 @@ class MonitorWidget(QWidget):
     def _set_opacity(self, value: float) -> None:
         self.cfg["panel_opacity"] = value
         self.update()
+        save_config(self.cfg)
+
+    # -- Màu sắc ------------------------------------------------------------ #
+    def _color_for(self, key: str) -> str:
+        colors = self.cfg.get("colors") or {}
+        return colors.get(key) or THEMES["cyber"].get(key, "#00E5FF")
+
+    def _accent_color(self, alpha: int = 255) -> QColor:
+        c = QColor(self._color_for("net"))
+        c.setAlpha(alpha)
+        return c
+
+    def _apply_colors(self) -> None:
+        for g in self.gauges:
+            g.base_color = QColor(self._color_for(g.key))
+        self.update()
+
+    def _set_theme(self, name: str) -> None:
+        if name not in THEMES:
+            return
+        self.cfg["theme"] = name
+        self.cfg["colors"] = dict(THEMES[name])
+        self._apply_colors()
+        save_config(self.cfg)
+
+    def _pick_color(self, key: str) -> None:
+        current = QColor(self._color_for(key))
+        col = QColorDialog.getColor(current, self, "Chọn màu hiển thị")
+        if not col.isValid():
+            return
+        self.cfg.setdefault("colors", {})[key] = col.name()
+        self.cfg["theme"] = "custom"
+        for a in self.theme_group.actions():   # bỏ chọn các theme dựng sẵn
+            a.setChecked(False)
+        self._apply_colors()
         save_config(self.cfg)
 
     # -- Tự khởi động cùng Windows ----------------------------------------- #
@@ -544,7 +644,7 @@ class MonitorWidget(QWidget):
         p.setPen(QPen(QColor(90, 130, 180, 60), 1.4))
         p.drawPath(path)
         # Đường accent mảnh phía trên
-        p.setPen(QPen(QColor(0, 229, 255, 70), 1.2))
+        p.setPen(QPen(self._accent_color(70), 1.2))
         p.drawLine(
             QPointF(rect.left() + 20, rect.top() + 8),
             QPointF(rect.right() - 20, rect.top() + 8),
@@ -636,7 +736,7 @@ class MonitorWidget(QWidget):
         up = human_speed(d.get("net_up", 0.0))
 
         # Network bên trái
-        p.setPen(QColor(0, 229, 255, 235))
+        p.setPen(self._accent_color(235))
         p.drawText(
             QRectF(rect.left(), y + 4, rect.width() * 0.62, self.FOOTER - 6),
             Qt.AlignLeft | Qt.AlignVCenter,

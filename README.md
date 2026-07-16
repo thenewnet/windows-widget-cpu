@@ -21,6 +21,8 @@ vòng sáng chuyển màu đỏ khi tải cao, hiệu ứng chạy mượt.
 - 🌐 Dải **tốc độ mạng** lên/xuống theo thời gian thực
 - 🌡️ **Nhiệt độ** CPU (nếu cảm biến hỗ trợ) hoặc GPU
 - 🪟 Cửa sổ **trong suốt, không viền, luôn nổi trên cùng**
+- 🎨 **Tùy chọn màu sắc**: 6 bảng màu dựng sẵn (Cyber, Aurora, Sunset, Matrix,
+  Ice, Magma) hoặc **tự chọn màu riêng cho từng chỉ số**
 - 🖱️ **Kéo thả** tự do; nháy đúp để thu gọn; chuột phải mở menu
 - 📌 Khóa vị trí, xoay dọc/ngang, chỉnh độ trong suốt, ẩn/hiện nhãn
 - 🚀 **Khởi động cùng Windows** (bật trong menu chuột phải)
@@ -56,7 +58,22 @@ Double-click **`build_exe.bat`**. Sau khi xong, lấy file
 | Click icon ở khay hệ thống | Ẩn/hiện widget |
 
 Menu chuột phải: khóa vị trí · xoay dọc/ngang · thu gọn · hiện nhãn ·
-độ trong suốt · khởi động cùng Windows · thoát.
+độ trong suốt · **màu sắc** · khởi động cùng Windows · thoát.
+
+### Đổi màu
+
+Chuột phải → **Màu sắc**:
+- Chọn nhanh một trong 6 **bảng màu dựng sẵn**, hoặc
+- **Tùy chỉnh màu {CPU/RAM/DISK/GPU}…** để mở bảng chọn màu và đặt màu riêng
+  cho từng chỉ số. "Tùy chỉnh màu Mạng/nhấn…" đổi màu dòng tốc độ mạng và
+  đường viền nhấn.
+
+Màu, vị trí và mọi cài đặt được lưu lại tự động, giữ nguyên cho lần mở sau.
+
+### Khởi động cùng Windows
+
+Chuột phải → **Khởi động cùng Windows** (bật/tắt). Khi bật, widget tự chạy mỗi
+lần đăng nhập (đăng ký ở `HKCU\...\Run`, không cần quyền admin).
 
 ## Ghi chú
 
