@@ -13,6 +13,7 @@ Chạy:  pythonw float_monitor.py   (hoặc double-click run.bat)
 from __future__ import annotations
 
 import json
+import ctypes
 import os
 import subprocess
 import sys
@@ -138,6 +139,58 @@ def save_config(cfg: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Mức hoạt động ổ đĩa trên Windows qua Performance Counter (PDH)
+#  Task Manager cũng dùng nguồn này: \PhysicalDisk(_Total)\% Idle Time
+#  -> active% = 100 - idle%. psutil KHÔNG có busy_time trên Windows nên phải
+#  đọc trực tiếp qua PDH bằng ctypes (không cần cài thêm thư viện).
+# --------------------------------------------------------------------------- #
+class _PdhFmtDouble(ctypes.Structure):
+    _fields_ = [("CStatus", ctypes.c_ulong), ("doubleValue", ctypes.c_double)]
+
+
+class _WindowsDiskPerf:
+    PDH_FMT_DOUBLE = 0x00000200
+    COUNTER = r"\PhysicalDisk(_Total)\% Idle Time"
+
+    def __init__(self) -> None:
+        self._pdh = ctypes.WinDLL("pdh")
+        self._query = ctypes.c_void_p()
+        self._counter = ctypes.c_void_p()
+
+        self._pdh.PdhOpenQueryW.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
+        self._pdh.PdhOpenQueryW.restype = ctypes.c_long
+        self._pdh.PdhAddEnglishCounterW.argtypes = [
+            ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_void_p)]
+        self._pdh.PdhAddEnglishCounterW.restype = ctypes.c_long
+        self._pdh.PdhCollectQueryData.argtypes = [ctypes.c_void_p]
+        self._pdh.PdhCollectQueryData.restype = ctypes.c_long
+        self._pdh.PdhGetFormattedCounterValue.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(_PdhFmtDouble)]
+        self._pdh.PdhGetFormattedCounterValue.restype = ctypes.c_long
+
+        if self._pdh.PdhOpenQueryW(None, 0, ctypes.byref(self._query)) != 0:
+            raise OSError("PdhOpenQuery thất bại")
+        if self._pdh.PdhAddEnglishCounterW(
+                self._query, self.COUNTER, 0, ctypes.byref(self._counter)) != 0:
+            raise OSError("PdhAddEnglishCounter thất bại")
+        self._pdh.PdhCollectQueryData(self._query)  # lấy mẫu mồi
+
+    def read(self) -> float | None:
+        """Trả về % thời gian ổ đĩa đang bận (0..100), hoặc None nếu chưa sẵn."""
+        if self._pdh.PdhCollectQueryData(self._query) != 0:
+            return None
+        val = _PdhFmtDouble()
+        if self._pdh.PdhGetFormattedCounterValue(
+                self._counter, self.PDH_FMT_DOUBLE, None, ctypes.byref(val)) != 0:
+            return None
+        active = 100.0 - val.doubleValue
+        return max(0.0, min(100.0, active))
+
+
+# --------------------------------------------------------------------------- #
 #  Thu thập chỉ số hệ thống
 # --------------------------------------------------------------------------- #
 class SystemMetrics:
@@ -148,6 +201,19 @@ class SystemMetrics:
         self._last_disk_io = self._safe_disk_io()
         self._last_time = time.monotonic()
         self._gpu_available = self._detect_nvidia()
+
+        # Nguồn mức hoạt động ổ đĩa: Windows dùng PDH, nơi khác dùng busy_time
+        self._win_disk = None
+        if IS_WINDOWS:
+            try:
+                self._win_disk = _WindowsDiskPerf()
+            except Exception:
+                self._win_disk = None
+        self._disk_activity_ok = (
+            self._win_disk is not None
+            or getattr(self._last_disk_io, "busy_time", None) is not None
+        )
+
         # "mồi" cpu_percent để lần đọc đầu không trả về 0.0
         psutil.cpu_percent(interval=None)
 
@@ -233,17 +299,25 @@ class SystemMetrics:
         up = (net.bytes_sent - self._last_net.bytes_sent) / elapsed
         self._last_net = net
 
-        # Mức hoạt động ổ đĩa (% thời gian bận I/O) - dựa trên busy_time (ms).
-        # Không phải nền tảng nào cũng có busy_time -> trả None nếu thiếu.
+        # Mức hoạt động ổ đĩa (% thời gian bận I/O).
         disk_activity = None
-        io = self._safe_disk_io()
-        if io is not None and self._last_disk_io is not None:
-            last_busy = getattr(self._last_disk_io, "busy_time", None)
-            busy = getattr(io, "busy_time", None)
-            if last_busy is not None and busy is not None:
-                delta = busy - last_busy               # mili-giây bận
-                disk_activity = max(0.0, min(100.0, delta / (elapsed * 1000) * 100))
-        self._last_disk_io = io
+        if self._win_disk is not None:
+            # Windows: đọc trực tiếp Performance Counter (giống Task Manager)
+            try:
+                disk_activity = self._win_disk.read()
+            except Exception:
+                disk_activity = None
+        else:
+            # Linux/khác: suy ra từ busy_time (mili-giây bận)
+            io = self._safe_disk_io()
+            if io is not None and self._last_disk_io is not None:
+                last_busy = getattr(self._last_disk_io, "busy_time", None)
+                busy = getattr(io, "busy_time", None)
+                if last_busy is not None and busy is not None:
+                    delta = busy - last_busy
+                    disk_activity = max(0.0, min(100.0,
+                                                 delta / (elapsed * 1000) * 100))
+            self._last_disk_io = io
 
         self._last_time = now
 
@@ -262,10 +336,8 @@ class SystemMetrics:
             "cpu_temp": cpu_temp,    # °C hoặc None
         }
 
-    @staticmethod
-    def disk_activity_supported() -> bool:
-        io = SystemMetrics._safe_disk_io()
-        return io is not None and getattr(io, "busy_time", None) is not None
+    def disk_activity_supported(self) -> bool:
+        return self._disk_activity_ok
 
     @property
     def gpu_available(self) -> bool:
@@ -466,7 +538,7 @@ class MonitorWidget(QWidget):
         act_disk_act = QAction("Mức hoạt động I/O (%)", disk_menu, checkable=True)
         act_disk_act.setChecked(self.cfg.get("disk_mode") == "activity")
         act_disk_act.triggered.connect(lambda: self._set_disk_mode("activity"))
-        if not SystemMetrics.disk_activity_supported():
+        if not self.metrics.disk_activity_supported():
             act_disk_act.setText("Mức hoạt động I/O (không hỗ trợ)")
             act_disk_act.setEnabled(False)
         self.disk_group.addAction(act_disk_usage)
