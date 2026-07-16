@@ -434,6 +434,7 @@ class MonitorWidget(QWidget):
         self.metrics = SystemMetrics(gpu_enabled=cfg.get("gpu_enabled", True))
         self._drag_offset = None
         self._data = {}
+        self._has_temp = False   # có cảm biến nhiệt độ hay không (dành chỗ footer)
 
         self._build_gauges()
 
@@ -479,7 +480,6 @@ class MonitorWidget(QWidget):
     def _layout_window(self) -> None:
         ring = self._ring_size()
         n = len(self.gauges)
-        show_footer = True  # luôn có network (+ nhiệt độ nếu có)
 
         if self.cfg["layout"] == "vertical":
             width = self.MARGIN * 2 + ring
@@ -488,8 +488,7 @@ class MonitorWidget(QWidget):
             width = self.MARGIN * 2 + n * ring + (n - 1) * self.GAP
             height = self.MARGIN * 2 + ring
 
-        if show_footer:
-            height += self.FOOTER
+        height += self._footer_height()  # dải network (+ nhiệt độ)
 
         self.resize(width, height)
 
@@ -779,6 +778,10 @@ class MonitorWidget(QWidget):
 
     def _poll(self) -> None:
         self._data = self.metrics.poll()
+        # Nếu lần đầu phát hiện có nhiệt độ, mở rộng footer (chỉ 1 lần)
+        if not self._has_temp and self._current_temp()[0] is not None:
+            self._has_temp = True
+            self._layout_window()
         for g in self.gauges:
             if g.key == "disk":
                 val, label = self._disk_value_label()
@@ -907,46 +910,74 @@ class MonitorWidget(QWidget):
                               box.width(), box.height() * 0.3)
             p.drawText(lbl_rect, Qt.AlignHCenter | Qt.AlignTop, g.label)
 
-    def _draw_footer(self, p: QPainter) -> None:
-        d = self._data
-        y = self.height() - self.FOOTER
-        rect = QRectF(self.MARGIN, y, self.width() - self.MARGIN * 2, self.FOOTER)
+    # -- Footer (network + nhiệt độ) --------------------------------------- #
+    def _current_temp(self) -> tuple[float | None, str]:
+        """Nhiệt độ hiển thị: CPU ưu tiên, không có thì GPU."""
+        temp = self._data.get("cpu_temp")
+        if temp is not None:
+            return temp, "CPU"
+        return self._data.get("gpu_temp"), "GPU"
 
-        # đường phân cách mảnh
-        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
-        p.drawLine(QPointF(rect.left(), y + 2), QPointF(rect.right(), y + 2))
+    def _footer_height(self) -> int:
+        if self.cfg["layout"] == "vertical":
+            lines = 2 + (1 if self._has_temp else 0)  # ↓, ↑ (+ nhiệt độ)
+            return 10 + lines * 16
+        return self.FOOTER
 
+    def _footer_font(self, p: QPainter) -> QFont:
         font = QFont("Consolas", 9)
         if not font.exactMatch():
             font = QFont("Segoe UI", 9)
-        p.setFont(font)
+        return font
 
-        down = human_speed(d.get("net_down", 0.0))
-        up = human_speed(d.get("net_up", 0.0))
+    def _draw_footer(self, p: QPainter) -> None:
+        d = self._data
+        fh = self._footer_height()
+        y = self.height() - fh
+        rect = QRectF(self.MARGIN, y, self.width() - self.MARGIN * 2, fh)
 
-        # Network bên trái
-        p.setPen(self._accent_color(235))
-        p.drawText(
-            QRectF(rect.left(), y + 4, rect.width() * 0.62, self.FOOTER - 6),
-            Qt.AlignLeft | Qt.AlignVCenter,
-            f"↓ {down.strip()}   ↑ {up.strip()}",
-        )
+        # đường phân cách mảnh
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
+        p.drawLine(QPointF(rect.left(), y + 3), QPointF(rect.right(), y + 3))
 
-        # Nhiệt độ bên phải (CPU ưu tiên, không có thì GPU)
-        temp = d.get("cpu_temp")
-        temp_lbl = "CPU"
-        if temp is None:
-            temp = d.get("gpu_temp")
-            temp_lbl = "GPU"
+        p.setFont(self._footer_font(p))
+        down = human_speed(d.get("net_down", 0.0)).strip()
+        up = human_speed(d.get("net_up", 0.0)).strip()
+        temp, temp_lbl = self._current_temp()
+        accent = self._accent_color(235)
+        tcol = None
         if temp is not None:
             tcol = QColor("#00E676") if temp < 70 else QColor("#FF3D57")
-            p.setPen(tcol)
+
+        if self.cfg["layout"] == "vertical":
+            # Xếp chồng, canh giữa: mỗi chỉ số 1 dòng
+            line_h = 16
+            top = y + 8
+            rows = [(f"↓ {down}", accent), (f"↑ {up}", accent)]
+            if temp is not None:
+                rows.append((f"{temp_lbl} {int(round(temp))}°C", tcol))
+            for i, (text, col) in enumerate(rows):
+                p.setPen(col)
+                p.drawText(
+                    QRectF(rect.left(), top + i * line_h, rect.width(), line_h),
+                    Qt.AlignHCenter | Qt.AlignVCenter, text,
+                )
+        else:
+            # Ngang: network bên trái, nhiệt độ bên phải
+            p.setPen(accent)
             p.drawText(
-                QRectF(rect.left() + rect.width() * 0.62, y + 4,
-                       rect.width() * 0.38, self.FOOTER - 6),
-                Qt.AlignRight | Qt.AlignVCenter,
-                f"{temp_lbl} {int(round(temp))}°C",
+                QRectF(rect.left(), y + 4, rect.width() * 0.62, fh - 6),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                f"↓ {down}   ↑ {up}",
             )
+            if temp is not None:
+                p.setPen(tcol)
+                p.drawText(
+                    QRectF(rect.left() + rect.width() * 0.62, y + 4,
+                           rect.width() * 0.38, fh - 6),
+                    Qt.AlignRight | Qt.AlignVCenter,
+                    f"{temp_lbl} {int(round(temp))}°C",
+                )
 
 
 # --------------------------------------------------------------------------- #
