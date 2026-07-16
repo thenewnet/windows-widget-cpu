@@ -108,6 +108,7 @@ DEFAULT_CONFIG = {
     "panel_opacity": 0.72,     # độ mờ nền panel (0..1)
     "compact": False,
     "show_labels": True,
+    "disk_mode": "usage",      # usage = dung lượng đã dùng | activity = hoạt động I/O
     "theme": "cyber",          # tên theme dựng sẵn, hoặc "custom"
     "colors": dict(THEMES["cyber"]),  # màu thực tế đang dùng cho từng chỉ số
 }
@@ -144,10 +145,18 @@ class SystemMetrics:
 
     def __init__(self) -> None:
         self._last_net = psutil.net_io_counters()
+        self._last_disk_io = self._safe_disk_io()
         self._last_time = time.monotonic()
         self._gpu_available = self._detect_nvidia()
         # "mồi" cpu_percent để lần đọc đầu không trả về 0.0
         psutil.cpu_percent(interval=None)
+
+    @staticmethod
+    def _safe_disk_io():
+        try:
+            return psutil.disk_io_counters()
+        except Exception:
+            return None
 
     # -- GPU (NVIDIA) ------------------------------------------------------- #
     @staticmethod
@@ -217,12 +226,25 @@ class SystemMetrics:
 
         cpu = psutil.cpu_percent(interval=None)
         ram = psutil.virtual_memory().percent
-        disk = psutil.disk_usage(os.path.abspath(os.sep)).percent
+        disk_usage = psutil.disk_usage(os.path.abspath(os.sep)).percent
 
         net = psutil.net_io_counters()
         down = (net.bytes_recv - self._last_net.bytes_recv) / elapsed
         up = (net.bytes_sent - self._last_net.bytes_sent) / elapsed
         self._last_net = net
+
+        # Mức hoạt động ổ đĩa (% thời gian bận I/O) - dựa trên busy_time (ms).
+        # Không phải nền tảng nào cũng có busy_time -> trả None nếu thiếu.
+        disk_activity = None
+        io = self._safe_disk_io()
+        if io is not None and self._last_disk_io is not None:
+            last_busy = getattr(self._last_disk_io, "busy_time", None)
+            busy = getattr(io, "busy_time", None)
+            if last_busy is not None and busy is not None:
+                delta = busy - last_busy               # mili-giây bận
+                disk_activity = max(0.0, min(100.0, delta / (elapsed * 1000) * 100))
+        self._last_disk_io = io
+
         self._last_time = now
 
         gpu_util, gpu_temp = self._read_gpu()
@@ -231,13 +253,19 @@ class SystemMetrics:
         return {
             "cpu": cpu,
             "ram": ram,
-            "disk": disk,
+            "disk_usage": disk_usage,        # % dung lượng đã dùng
+            "disk_activity": disk_activity,  # % hoạt động I/O hoặc None
             "net_down": down,        # bytes/s
             "net_up": up,            # bytes/s
             "gpu": gpu_util,         # % hoặc None
             "gpu_temp": gpu_temp,    # °C hoặc None
             "cpu_temp": cpu_temp,    # °C hoặc None
         }
+
+    @staticmethod
+    def disk_activity_supported() -> bool:
+        io = SystemMetrics._safe_disk_io()
+        return io is not None and getattr(io, "busy_time", None) is not None
 
     @property
     def gpu_available(self) -> bool:
@@ -427,6 +455,25 @@ class MonitorWidget(QWidget):
         color_menu.addAction(a_net)
         self.color_menu = color_menu
 
+        # Submenu hiển thị ổ cứng: dung lượng đã dùng | mức hoạt động I/O
+        disk_menu = QMenu("Ổ cứng", self.menu)
+        disk_menu.setStyleSheet(self.menu.styleSheet())
+        self.disk_group = QActionGroup(self)
+        self.disk_group.setExclusive(True)
+        act_disk_usage = QAction("Dung lượng đã dùng (%)", disk_menu, checkable=True)
+        act_disk_usage.setChecked(self.cfg.get("disk_mode", "usage") == "usage")
+        act_disk_usage.triggered.connect(lambda: self._set_disk_mode("usage"))
+        act_disk_act = QAction("Mức hoạt động I/O (%)", disk_menu, checkable=True)
+        act_disk_act.setChecked(self.cfg.get("disk_mode") == "activity")
+        act_disk_act.triggered.connect(lambda: self._set_disk_mode("activity"))
+        if not SystemMetrics.disk_activity_supported():
+            act_disk_act.setText("Mức hoạt động I/O (không hỗ trợ)")
+            act_disk_act.setEnabled(False)
+        self.disk_group.addAction(act_disk_usage)
+        self.disk_group.addAction(act_disk_act)
+        disk_menu.addAction(act_disk_usage)
+        disk_menu.addAction(act_disk_act)
+
         self.act_autostart = QAction("Khởi động cùng Windows", self, checkable=True)
         self.act_autostart.setChecked(self._is_autostart())
         self.act_autostart.triggered.connect(self._toggle_autostart)
@@ -439,6 +486,7 @@ class MonitorWidget(QWidget):
         self.menu.addAction(self.act_layout)
         self.menu.addAction(self.act_compact)
         self.menu.addAction(self.act_labels)
+        self.menu.addMenu(disk_menu)
         self.menu.addMenu(op_menu)
         self.menu.addMenu(color_menu)
         self.menu.addSeparator()
@@ -475,6 +523,17 @@ class MonitorWidget(QWidget):
 
     def _set_opacity(self, value: float) -> None:
         self.cfg["panel_opacity"] = value
+        self.update()
+        save_config(self.cfg)
+
+    def _set_disk_mode(self, mode: str) -> None:
+        self.cfg["disk_mode"] = mode
+        if self._data:                 # cập nhật ngay nhãn & giá trị gauge ổ đĩa
+            for g in self.gauges:
+                if g.key == "disk":
+                    val, label = self._disk_value_label()
+                    g.label = label
+                    g.set_target(val)
         self.update()
         save_config(self.cfg)
 
@@ -593,9 +652,22 @@ class MonitorWidget(QWidget):
         save_config(self.cfg)
 
     # -- Cập nhật dữ liệu --------------------------------------------------- #
+    def _disk_value_label(self) -> tuple[float, str]:
+        """Trả về (giá trị %, nhãn) cho gauge ổ đĩa theo chế độ đang chọn."""
+        if self.cfg.get("disk_mode") == "activity":
+            act = self._data.get("disk_activity")
+            if act is not None:
+                return act, "I/O"
+        return self._data.get("disk_usage", 0.0), "DISK"
+
     def _poll(self) -> None:
         self._data = self.metrics.poll()
         for g in self.gauges:
+            if g.key == "disk":
+                val, label = self._disk_value_label()
+                g.label = label
+                g.set_target(val)
+                continue
             val = self._data.get(g.key)
             if val is not None:
                 g.set_target(val)

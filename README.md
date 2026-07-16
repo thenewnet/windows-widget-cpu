@@ -18,6 +18,8 @@ vòng sáng chuyển màu đỏ khi tải cao, hiệu ứng chạy mượt.
 ## Tính năng
 
 - 🔵 Vòng gauge cho **CPU, RAM, Disk** và **GPU** (nếu có card NVIDIA)
+- 💽 **Ổ cứng 2 chế độ**: hiển thị **dung lượng đã dùng (%)** hoặc **mức hoạt
+  động I/O (%)** — đổi trong menu chuột phải
 - 🌐 Dải **tốc độ mạng** lên/xuống theo thời gian thực
 - 🌡️ **Nhiệt độ** CPU (nếu cảm biến hỗ trợ) hoặc GPU
 - 🪟 Cửa sổ **trong suốt, không viền, luôn nổi trên cùng**
@@ -45,6 +47,24 @@ widget luôn**. Nếu máy chưa có Python, script sẽ thử cài giúp qua `w
 > ```powershell
 > powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/thenewnet/windows-widget-cpu/main/install.ps1 | iex"
 > ```
+
+## 🔄 Cập nhật (nếu bạn đã cài rồi)
+
+Chỉ cần **chạy lại đúng lệnh cài đặt** — nó tự tải bản mới nhất, cập nhật thư
+viện, và khởi động lại widget. Cài đặt cũ (vị trí, màu, chế độ ổ cứng…) **được
+giữ nguyên**.
+
+```powershell
+irm https://raw.githubusercontent.com/thenewnet/windows-widget-cpu/main/install.ps1 | iex
+```
+
+Lệnh này sẽ:
+1. Tắt widget đang chạy (nếu có)
+2. Tải lại `float_monitor.py` phiên bản mới nhất từ GitHub
+3. Cập nhật thư viện trong môi trường sẵn có (nhanh, không tải lại từ đầu)
+4. Mở lại widget với bản mới
+
+> Không cần gỡ cài rồi cài lại. Chạy lại lệnh trên là đủ để lên bản mới.
 
 **Gỡ cài đặt** cũng bằng 1 dòng:
 
@@ -81,7 +101,18 @@ Double-click **`build_exe.bat`**. Sau khi xong, lấy file
 | Click icon ở khay hệ thống | Ẩn/hiện widget |
 
 Menu chuột phải: khóa vị trí · xoay dọc/ngang · thu gọn · hiện nhãn ·
-độ trong suốt · **màu sắc** · khởi động cùng Windows · thoát.
+**ổ cứng** · độ trong suốt · **màu sắc** · khởi động cùng Windows · thoát.
+
+### Chế độ hiển thị ổ cứng
+
+Chuột phải → **Ổ cứng**:
+- **Dung lượng đã dùng (%)** — phần trăm dung lượng ổ hệ thống đã dùng (mặc định,
+  ổn định). Nhãn hiển thị `DISK`.
+- **Mức hoạt động I/O (%)** — phần trăm thời gian ổ đĩa đang bận đọc/ghi, giống
+  cột *Active time* trong Task Manager. Nhãn đổi thành `I/O`.
+
+Lựa chọn được lưu lại. (Nếu hệ thống không cung cấp số liệu I/O, mục này sẽ bị
+làm mờ và widget dùng chế độ dung lượng.)
 
 ### Đổi màu
 
@@ -100,8 +131,8 @@ lần đăng nhập (đăng ký ở `HKCU\...\Run`, không cần quyền admin).
 
 ## Ghi chú
 
-- **Disk** hiển thị phần trăm **dung lượng đã dùng** của ổ hệ thống (ổn định,
-  dễ đọc). Nếu bạn muốn đổi sang phần trăm **hoạt động I/O**, mình có thể chỉnh.
+- **Disk** mặc định hiển thị phần trăm **dung lượng đã dùng**. Bạn có thể đổi
+  sang phần trăm **hoạt động I/O** trong menu chuột phải → **Ổ cứng**.
 - **GPU** dùng `nvidia-smi` (có sẵn khi cài driver NVIDIA). Máy dùng GPU
   AMD/Intel sẽ tự ẩn vòng GPU.
 - **Nhiệt độ CPU** trên Windows đôi khi không có sẵn (Windows không expose
