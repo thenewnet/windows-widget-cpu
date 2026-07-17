@@ -20,6 +20,8 @@ vòng sáng chuyển màu đỏ khi tải cao, hiệu ứng chạy mượt.
 - 🔵 Vòng gauge cho **CPU, RAM, Disk** và **GPU** (nếu có card NVIDIA)
 - 💽 **Ổ cứng 2 chế độ**: hiển thị **dung lượng đã dùng (%)** hoặc **mức hoạt
   động I/O (%)** — đổi trong menu chuột phải
+- 🧠 **RAM 2 chế độ**: hiển thị **phần trăm (%)** hoặc **dung lượng đang dùng
+  (GB/MB)** — đổi trong menu chuột phải
 - 🌐 Dải **tốc độ mạng** lên/xuống theo thời gian thực
 - 🌡️ **Nhiệt độ** CPU (nếu cảm biến hỗ trợ) hoặc GPU
 - 🪟 Cửa sổ **trong suốt, không viền, luôn nổi trên cùng**
@@ -101,8 +103,15 @@ Double-click **`build_exe.bat`**. Sau khi xong, lấy file
 | Click icon ở khay hệ thống | Ẩn/hiện widget |
 
 Menu chuột phải: khóa vị trí · xoay dọc/ngang · thu gọn · hiện nhãn ·
-**ổ cứng** · độ trong suốt · **màu sắc** · **hiển thị GPU** ·
+**RAM** · **ổ cứng** · độ trong suốt · **màu sắc** · **hiển thị GPU** ·
 khởi động cùng Windows · thoát.
+
+### Chế độ hiển thị RAM
+
+Chuột phải → **RAM**:
+- **Phần trăm (%)** — % bộ nhớ đang dùng (mặc định).
+- **Dung lượng đang dùng (GB/MB)** — số ở giữa vòng đổi thành dung lượng thực
+  tế (vd `9.8 GB`); vòng vẫn đầy theo phần trăm để dễ nhìn.
 
 ### Chế độ hiển thị ổ cứng
 

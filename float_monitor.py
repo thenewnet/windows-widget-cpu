@@ -128,6 +128,7 @@ DEFAULT_CONFIG = {
     "compact": False,
     "show_labels": True,
     "disk_mode": "usage",      # usage = dung lượng đã dùng | activity = hoạt động I/O
+    "ram_mode": "percent",     # percent = % | used = dung lượng đang dùng (GB/MB)
     "gpu_enabled": True,       # bật/tắt đọc GPU qua nvidia-smi
     "theme": "cyber",          # tên theme dựng sẵn, hoặc "custom"
     "colors": dict(THEMES["cyber"]),  # màu thực tế đang dùng cho từng chỉ số
@@ -317,7 +318,9 @@ class SystemMetrics:
         elapsed = max(now - self._last_time, 1e-6)
 
         cpu = psutil.cpu_percent(interval=None)
-        ram = psutil.virtual_memory().percent
+        vm = psutil.virtual_memory()
+        ram = vm.percent
+        ram_used = vm.total - vm.available   # khớp với % đang hiển thị
         disk_usage = psutil.disk_usage(os.path.abspath(os.sep)).percent
 
         net = psutil.net_io_counters()
@@ -353,6 +356,7 @@ class SystemMetrics:
         return {
             "cpu": cpu,
             "ram": ram,
+            "ram_used": ram_used,            # bytes RAM đang dùng
             "disk_usage": disk_usage,        # % dung lượng đã dùng
             "disk_activity": disk_activity,  # % hoạt động I/O hoặc None
             "net_down": down,        # bytes/s
@@ -383,6 +387,15 @@ def human_speed(bytes_per_sec: float) -> str:
     return f"{mb / 1024:5.2f} GB/s"
 
 
+def human_mem(nbytes: float) -> tuple[str, str]:
+    """Trả về (số, đơn vị) cho dung lượng bộ nhớ, vd ('9.8', 'GB')."""
+    gb = nbytes / (1024 ** 3)
+    if gb >= 1:
+        return f"{gb:.1f}", "GB"
+    mb = nbytes / (1024 ** 2)
+    return f"{mb:.0f}", "MB"
+
+
 # --------------------------------------------------------------------------- #
 #  Mô hình một gauge
 # --------------------------------------------------------------------------- #
@@ -391,8 +404,11 @@ class Gauge:
         self.key = key
         self.label = label
         self.base_color = QColor(color)
-        self.target = 0.0       # giá trị mục tiêu (0..100)
+        self.target = 0.0       # giá trị mục tiêu (0..100) - dùng vẽ vòng
         self.display = 0.0      # giá trị đang hiển thị (animation)
+        # Nếu đặt center_text, số ở giữa dùng chuỗi này thay vì phần trăm
+        self.center_text = None   # str hoặc None
+        self.suffix = "%"          # đơn vị nhỏ bên cạnh số
 
     def set_target(self, value: float) -> None:
         self.target = max(0.0, min(100.0, float(value)))
@@ -575,6 +591,22 @@ class MonitorWidget(QWidget):
         disk_menu.addAction(act_disk_usage)
         disk_menu.addAction(act_disk_act)
 
+        # Submenu hiển thị RAM: phần trăm | dung lượng đang dùng
+        ram_menu = QMenu("RAM", self.menu)
+        ram_menu.setStyleSheet(self.menu.styleSheet())
+        self.ram_group = QActionGroup(self)
+        self.ram_group.setExclusive(True)
+        act_ram_pct = QAction("Phần trăm (%)", ram_menu, checkable=True)
+        act_ram_pct.setChecked(self.cfg.get("ram_mode", "percent") == "percent")
+        act_ram_pct.triggered.connect(lambda: self._set_ram_mode("percent"))
+        act_ram_used = QAction("Dung lượng đang dùng (GB/MB)", ram_menu, checkable=True)
+        act_ram_used.setChecked(self.cfg.get("ram_mode") == "used")
+        act_ram_used.triggered.connect(lambda: self._set_ram_mode("used"))
+        self.ram_group.addAction(act_ram_pct)
+        self.ram_group.addAction(act_ram_used)
+        ram_menu.addAction(act_ram_pct)
+        ram_menu.addAction(act_ram_used)
+
         self.act_gpu = QAction("Hiển thị GPU (nvidia-smi)", self, checkable=True)
         self.act_gpu.setChecked(self.cfg.get("gpu_enabled", True))
         self.act_gpu.triggered.connect(self._toggle_gpu)
@@ -591,6 +623,7 @@ class MonitorWidget(QWidget):
         self.menu.addAction(self.act_layout)
         self.menu.addAction(self.act_compact)
         self.menu.addAction(self.act_labels)
+        self.menu.addMenu(ram_menu)
         self.menu.addMenu(disk_menu)
         self.menu.addMenu(op_menu)
         self.menu.addMenu(color_menu)
@@ -640,6 +673,15 @@ class MonitorWidget(QWidget):
                     val, label = self._disk_value_label()
                     g.label = label
                     g.set_target(val)
+        self.update()
+        save_config(self.cfg)
+
+    def _set_ram_mode(self, mode: str) -> None:
+        self.cfg["ram_mode"] = mode
+        if self._data:                 # cập nhật ngay số hiển thị vòng RAM
+            for g in self.gauges:
+                if g.key == "ram":
+                    self._apply_ram_text(g)
         self.update()
         save_config(self.cfg)
 
@@ -788,9 +830,25 @@ class MonitorWidget(QWidget):
                 g.label = label
                 g.set_target(val)
                 continue
+            if g.key == "ram":
+                g.set_target(self._data.get("ram", 0.0))
+                self._apply_ram_text(g)
+                continue
             val = self._data.get(g.key)
             if val is not None:
                 g.set_target(val)
+
+    def _apply_ram_text(self, g: "Gauge") -> None:
+        """Đặt số hiển thị cho vòng RAM theo chế độ % hoặc dung lượng thực."""
+        if self.cfg.get("ram_mode") == "used":
+            used = self._data.get("ram_used")
+            if used is not None:
+                num, unit = human_mem(used)
+                g.center_text = num
+                g.suffix = unit
+                return
+        g.center_text = None   # về mặc định: hiển thị %
+        g.suffix = "%"
 
     def _animate(self) -> None:
         moved = False
@@ -871,34 +929,41 @@ class MonitorWidget(QWidget):
             p.setPen(main)
             p.drawArc(arc_box, start, span)
 
-        # Con số ở giữa
+        # Con số ở giữa (mặc định là %, hoặc chuỗi tùy biến vd '9.8')
         cx, cy = box.center().x(), box.center().y()
-        big = box.width() * (0.30 if not self.cfg["compact"] else 0.34)
-        num_font = QFont("Segoe UI", int(big), QFont.DemiBold)
+        value_text = (g.center_text if g.center_text is not None
+                      else f"{int(round(g.display))}")
+        suffix = g.suffix
+
+        # Thu nhỏ chữ số khi chuỗi dài (vd '15.7 GB') để không tràn vòng
+        factor = 0.30 if not self.cfg["compact"] else 0.34
+        if len(value_text) >= 4:
+            factor *= 0.72
+        elif len(value_text) == 3 and any(c in value_text for c in ".,"):
+            factor *= 0.86
+        big = box.width() * factor
+        num_font = QFont("Segoe UI", max(6, int(big)), QFont.DemiBold)
         num_font.setStyleStrategy(QFont.PreferAntialias)
 
-        value_text = f"{int(round(g.display))}"
         p.setFont(num_font)
         p.setPen(QColor(240, 248, 255))
-        # canh giữa (chừa chỗ cho nhãn bên dưới nếu có)
         offset = -box.height() * 0.06 if self.cfg["show_labels"] else 0
         num_rect = QRectF(box.left(), box.top() + offset,
                           box.width(), box.height())
         p.drawText(num_rect, Qt.AlignCenter, value_text)
 
-        # dấu %
-        small = QFont("Segoe UI", int(box.width() * 0.11))
-        p.setFont(small)
-        p.setPen(QColor(150, 170, 190))
-        fm_w = p.fontMetrics().horizontalAdvance("%")
-        p.setFont(num_font)
-        num_w = p.fontMetrics().horizontalAdvance(value_text)
-        p.setFont(small)
-        p.drawText(
-            QRectF(cx + num_w / 2 + 2, cy + offset - box.height() * 0.10,
-                   fm_w + 6, box.height() * 0.3),
-            Qt.AlignLeft | Qt.AlignVCenter, "%",
-        )
+        # đơn vị nhỏ (%, GB, MB) đặt cạnh phải con số
+        if suffix:
+            small = QFont("Segoe UI", int(box.width() * 0.10))
+            p.setFont(num_font)
+            num_w = p.fontMetrics().horizontalAdvance(value_text)
+            p.setFont(small)
+            p.setPen(QColor(150, 170, 190))
+            p.drawText(
+                QRectF(cx + num_w / 2 + 2, cy + offset - box.height() * 0.10,
+                       box.width() * 0.4, box.height() * 0.3),
+                Qt.AlignLeft | Qt.AlignVCenter, suffix,
+            )
 
         # Nhãn
         if self.cfg["show_labels"]:
